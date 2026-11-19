@@ -47,6 +47,13 @@ pub fn core_main() -> Option<CoreMainAction> {
         return None;
     }
     crate::load_custom_client();
+    // [CC 补丁1] 用环境变量 RDCC_APP_NAME 改应用名：配置目录、日志目录、IPC 通道都跟着应用名走，
+    // 这样我们的远程协助进程和用户自己装的 RustDesk 互不干扰。没设置这个变量时行为不变。
+    if let Ok(n) = std::env::var("RDCC_APP_NAME") {
+        if !n.is_empty() {
+            *config::APP_NAME.write().unwrap() = n;
+        }
+    }
     #[cfg(windows)]
     if !crate::platform::windows::bootstrap() {
         // return None to terminate the process
@@ -464,6 +471,23 @@ pub fn core_main() -> Option<CoreMainAction> {
         } else if args[0] == "--get-id" {
             println!("{}", crate::ipc::get_id());
             return None;
+        } else if args[0] == "--get-temporary-password" {
+            // [CC 补丁2] 输出正在运行的 --server 进程当前的临时密码（一行；取不到输出空行）
+            match crate::ipc::get_config("temporary-password") {
+                Ok(Some(v)) => println!("{}", v),
+                _ => println!(),
+            }
+            return None;
+        } else if args[0] == "--refresh-temporary-password" {
+            // [CC 补丁3] 让 --server 进程换一个新的临时密码并输出（用于「一次性」：每次协助前后各换一次）
+            if crate::ipc::update_temporary_password().is_ok() {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            match crate::ipc::get_config("temporary-password") {
+                Ok(Some(v)) => println!("{}", v),
+                _ => println!(),
+            }
+            return None;
         } else if args[0] == "--set-id" {
             if is_cli_setting_change_disabled() {
                 println!("Settings are disabled!");
@@ -871,6 +895,8 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
         Some("--password")
             | Some("--set-unlock-pin")
             | Some("--get-id")
+            | Some("--get-temporary-password")
+            | Some("--refresh-temporary-password")
             | Some("--set-id")
             | Some("--config")
             | Some("--option")
