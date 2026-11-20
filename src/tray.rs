@@ -10,6 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub fn start_tray() {
+    // 微调版（被聊天客户端调用时）不要托盘图标：托盘点开就是 RustDesk 主界面，里面有 ID、密码和「连接别人」，不该让坐席看到
+    if std::env::var("RDCC_APP_NAME").map(|v| !v.is_empty()).unwrap_or(false) {
+        return;
+    }
     if crate::ui_interface::get_builtin_option(keys::OPTION_HIDE_TRAY) == "Y" {
         #[cfg(not(target_os = "macos"))]
         {
