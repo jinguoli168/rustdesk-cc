@@ -22,6 +22,29 @@ use crate::{Frame, TraitCapturer};
 use crate::{PixelBuffer, Pixfmt};
 
 pub const PRIMARY_CAMERA_IDX: usize = 0;
+
+/// 把 RGBA 数据上下翻转并交换 R、B 通道（长度对不上时原样返回）。
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn flip_rows_and_swap_rb(raw: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let stride = width * 4;
+    if stride == 0 || raw.len() != stride * height {
+        return raw.to_vec();
+    }
+    let mut out = vec![0u8; raw.len()];
+    for y in 0..height {
+        let src = &raw[(height - 1 - y) * stride..(height - y) * stride];
+        let dst = &mut out[y * stride..(y + 1) * stride];
+        for x in 0..width {
+            let i = x * 4;
+            dst[i] = src[i + 2];
+            dst[i + 1] = src[i + 1];
+            dst[i + 2] = src[i];
+            dst[i + 3] = src[i + 3];
+        }
+    }
+    out
+}
+
 lazy_static::lazy_static! {
     static ref SYNC_CAMERA_DISPLAYS: Arc<Mutex<Vec<DisplayInfo>>> = Arc::new(Mutex::new(Vec::new()));
 }
@@ -224,9 +247,24 @@ impl TraitCapturer for CameraCapturer {
         }
         match self.camera.frame() {
             Ok(buffer) => {
+                // Windows 的未压缩摄像头画面（Media Foundation 的 RGB24，nokhwa 标成 RAWRGB）是从下往上、蓝绿红顺序，
+                // 直接当成从上往下的红绿蓝会得到上下颠倒、肤色偏蓝的画面；只对这一种格式翻正。
+                let bottom_up_bgr = cfg!(target_os = "windows")
+                    && matches!(
+                        buffer.source_frame_format(),
+                        nokhwa::utils::FrameFormat::RAWRGB
+                    );
                 match buffer.decode_image::<RgbAFormat>() {
                     Ok(decoded) => {
-                        self.data = decoded.as_raw().to_vec();
+                        self.data = if bottom_up_bgr {
+                            flip_rows_and_swap_rb(
+                                decoded.as_raw(),
+                                decoded.width() as usize,
+                                decoded.height() as usize,
+                            )
+                        } else {
+                            decoded.as_raw().to_vec()
+                        };
                         crate::would_block_if_equal(&mut self.last_data, &self.data)?;
                         // FIXME: macos's PixelBuffer cannot be directly created from bytes slice.
                         cfg_if::cfg_if! {
