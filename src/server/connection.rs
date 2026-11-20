@@ -5315,7 +5315,11 @@ impl Connection {
         //
         // We can add a (Vec<conn_id>, input device) to avoid this.
         // But it's not necessary now and we have to consider two audio services(client, server).
-        crate::audio_service::set_voice_call_input_device(None, true);
+        // 微调：只有「正在语音通话的这个连接」关闭时才重置语音输入设备。
+        // 原来任何连接（比如同一次协助里另开的文件传输、查看摄像头窗口）关闭都会重置，导致主连接的语音通话突然没声音。
+        if self.voice_calling {
+            crate::audio_service::set_voice_call_input_device(None, true);
+        }
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock
             && self.lock_after_session_end
