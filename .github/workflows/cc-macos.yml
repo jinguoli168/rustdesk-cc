@@ -215,6 +215,12 @@ jobs:
           fi
           ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.job.extra-build-args }}
 
+      - name: Re-sign app ad-hoc
+        # 主程序和 FlutterMacOS.framework 的临时签名不一致，启动会报 different Team IDs，整体重签
+        run: |
+          codesign --force --deep --sign - ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          codesign --verify --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app
+
       - name: create unsigned dmg
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
