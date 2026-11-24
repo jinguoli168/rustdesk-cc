@@ -1,0 +1,84 @@
+name: CC Windows 7 Sciter x86 build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SCITER_TOOLCHAIN: nightly-2023-10-13-i686-pc-windows-msvc
+  LLVM_VERSION: "15.0.6"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VCPKG_DEFAULT_HOST_TRIPLET: x86-windows-static
+
+jobs:
+  build-for-windows-sciter:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 检出源码和子模块
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: 安装 32 位 LLVM 和 Clang
+        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: 安装 Rust 1.75 nightly
+        # Sciter x86 绑定使用 abi_thiscall，构建脚本需要加载 32 位 LLVM。
+        run: |
+          rustup toolchain install "$SCITER_TOOLCHAIN" --profile minimal --no-self-update --force-non-host
+          rustup default "$SCITER_TOOLCHAIN" --force-non-host
+          rustc -vV
+
+      - name: 设置 vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: 安装 x86 静态依赖
+        run: |
+          vcpkg_root=$(cygpath -u "$VCPKG_ROOT")
+          if ! "$vcpkg_root/vcpkg.exe" install --triplet "$VCPKG_DEFAULT_HOST_TRIPLET" \
+            --x-install-root="$vcpkg_root/installed"; then
+            find "$vcpkg_root/buildtrees" -name '*-err.log' -print -exec cat {} +
+            exit 1
+          fi
+
+      - name: 编译 Sciter
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python3 res/inline-sciter.py
+          sed -i '/^sciter-rs = /s/branch = "dyn"/branch = "dyn_x86"/' Cargo.toml
+          cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
+          cargo build --locked --features inline --release --bins
+
+      - name: 整理便携版目录
+        run: |
+          mkdir -p Release
+          cp target/release/rustdesk.exe Release/RDCCRemote.exe
+          curl --fail --location --retry 3 -o Release/sciter.dll \
+            https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x32/sciter.dll
+          curl --fail --location --retry 3 -o usbmmidd_v2.zip \
+            https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip
+          unzip -q usbmmidd_v2.zip -d Release
+          # 沿用上游驱动目录，保留 WOW64 环境下使用的 64 位安装工具。
+          rm -f Release/usbmmidd_v2/deviceinstaller.exe Release/usbmmidd_v2/usbmmidd.bat
+          test -s Release/RDCCRemote.exe
+          test -s Release/sciter.dll
+          test -s Release/usbmmidd_v2/usbmmIdd.inf
+
+      - name: 上传 Win7 Sciter x86 产物
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-win7-sciter-x86
+          path: Release/
+          if-no-files-found: error
